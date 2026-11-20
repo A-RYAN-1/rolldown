@@ -27,7 +27,21 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::types::oxc_parse_type::OxcParseType;
 
 use super::parse_to_ecma_ast::ParseToEcmaAstResult;
-use super::tweak_ast_for_scanning::PreProcessor;
+use super::tweak_ast_for_scanning::{DeferPhaseRemoval, PreProcessor};
+
+/// The message of the warning for a deferred import that `PreProcessor` lowers.
+fn import_defer_removal_message(removal: DeferPhaseRemoval) -> (oxc::span::Span, &'static str) {
+  match removal {
+    DeferPhaseRemoval::OptionOff(span) => (
+      span,
+      "`import defer` is currently lowered to a normal import. This changes execution timing because side effects run immediately instead of when the deferred import is first used.",
+    ),
+    DeferPhaseRemoval::DynamicImportDefer(span) => (
+      span,
+      "`import.defer()` is currently lowered to `import()`. This changes execution timing because the module evaluates when it loads instead of when its namespace is first used. `experimental.importDefer` does not support `import.defer()` yet.",
+    ),
+  }
+}
 
 #[derive(Default)]
 pub struct PreProcessEcmaAst {
@@ -257,22 +271,21 @@ impl PreProcessEcmaAst {
           allocator,
           bundle_options.keep_names,
           Some(&bundle_options.drop_labels),
+          bundle_options.experimental.is_import_defer_enabled(),
         );
         pre_processor.visit_program(program);
         let defer_spans = pre_processor.take_defer_spans();
         (self.recreate_scoping(&mut None, program), defer_spans)
       });
 
-    warnings.extend(import_defer_spans.into_iter().map(|span| {
+    warnings.extend(import_defer_spans.into_iter().map(|removal| {
+      let (span, message) = import_defer_removal_message(removal);
       BuildDiagnostic::oxc_error(
         source.clone(),
         resolved_id.to_string(),
         String::new(),
-        "`import defer` is currently lowered to a normal import. This changes execution timing because side effects run immediately instead of when the deferred import is first used.".to_string(),
-        vec![LabeledSpan::at(
-          span.start..span.end,
-          "The deferred phase is removed here.",
-        )],
+        message.to_string(),
+        vec![LabeledSpan::at(span.start..span.end, "The deferred phase is removed here.")],
         EventKind::UnsupportedFeatureError,
       )
       .with_severity_warning()

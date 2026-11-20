@@ -9,7 +9,7 @@ use super::super::{
     scan_stage::{NormalizedScanStageOutput, ScanStage, ScanStageOutput},
   },
   types::{bundle_output::BundleOutput, scan_stage_cache::ScanStageCache},
-  utils::fs_utils::clean_dir,
+  utils::{fs_utils::clean_dir, import_defer_fallback::apply_import_defer_support},
 };
 use anyhow::Context;
 use arcstr::ArcStr;
@@ -172,7 +172,7 @@ impl<Fs: FileSystem + Clone + 'static> Bundle<Fs> {
         .collect()
     };
 
-    let scan_stage_output = match self
+    let mut scan_stage_output = match self
       .normalize_scan_stage_output_and_update_cache(scan_stage_output, is_full_scan_mode)
       .await
     {
@@ -186,6 +186,26 @@ impl<Fs: FileSystem + Clone + 'static> Bundle<Fs> {
     // Make sure the cache is reset if incremental build is not enabled.
     if !self.options.experimental.is_incremental_build_enabled() {
       std::mem::take(&mut self.cache);
+    }
+
+    // See internal-docs/import-defer/implementation.md ("Whole-build fallback").
+    if let Err(errors) = apply_import_defer_support(&mut scan_stage_output, &self.options) {
+      // The same hooks as for an error of the scan, where an eager import reports these errors.
+      let errors = BatchedBuildDiagnostic::new(errors);
+      self.repair_cache_after_failed_build(
+        is_full_scan_mode,
+        fetched_resolved_ids,
+        Some(scan_stage_output.symbol_ref_db),
+      );
+      self
+        .plugin_driver
+        .build_end(Some(&HookBuildEndArgs { errors: &errors, cwd: &self.options.cwd }))
+        .await?;
+      self
+        .plugin_driver
+        .close_bundle(Some(&HookCloseBundleArgs { errors: &errors, cwd: &self.options.cwd }))
+        .await?;
+      return Err(errors);
     }
 
     if let Err(errors) = self.end_build_phase(&scan_stage_output).await {

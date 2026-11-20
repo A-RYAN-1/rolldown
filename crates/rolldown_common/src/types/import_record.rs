@@ -78,9 +78,9 @@ bitflags::bitflags! {
     /// The import record is solely for re-export purposes, created by
     /// `export { .. } from '..'` or `export * as ns from '..'`
     const IsReExportOnly = 1 << 10;
-    /// The record is a deferred import: `import defer * as ns from 'mod'`. The scanner sets it only
-    /// when `experimental.importDefer` is on. A build that does not support the deferral clears it
-    /// before the link stage.
+    /// The record is a deferred import: `import defer * as ns from 'mod'` or `import.defer('mod')`.
+    /// The scanner sets it only when `experimental.importDefer` is on. A build that does not
+    /// support the deferral clears it before the link stage.
     const DeferPhase = 1 << 11;
 
     const TopLevelPureDynamicImport = Self::IsTopLevel.bits() | Self::PureDynamicImport.bits();

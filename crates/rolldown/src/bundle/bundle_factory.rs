@@ -3,7 +3,7 @@ use std::{any::Any, sync::Arc};
 use dashmap::DashMap;
 use rolldown_common::{
   BundleMode, BundlerOptions, FileEmitter, ModuleIdx, ModuleSideEffectsOverrides,
-  NormalizedBundlerOptions, SharedFileEmitter, SharedModuleInfoDashMap,
+  NormalizedBundlerOptions, SharedFileEmitter, SharedHmrSession, SharedModuleInfoDashMap,
   SharedModuleSideEffectsOverrides, WatchPath,
 };
 use rolldown_error::{BuildDiagnostic, BuildResult, EventKindSwitcher};
@@ -57,6 +57,9 @@ pub struct BundleFactory {
 
   /// Context for lazy compilation, if enabled
   pub lazy_compilation_context: Option<LazyCompilationContext>,
+
+  /// Shared with every bundle, so it outlives full builds.
+  pub hmr_session: SharedHmrSession,
 }
 
 impl BundleFactory {
@@ -95,6 +98,7 @@ impl BundleFactory {
       module_side_effects_overrides_for_incremental_build: module_side_effects_overrides,
       transform_dependencies_for_incremental_build: Arc::default(),
       lazy_compilation_context: inner_plugins_result.lazy_compilation_context,
+      hmr_session: SharedHmrSession::default(),
     })
   }
 
@@ -210,6 +214,7 @@ impl BundleFactory {
       bundle_span,
       cache,
       _activity: crate::utils::build_activity::BuildActivity::enter(),
+      hmr_session: self.hmr_session.clone(),
     };
     self.last_bundle_handle = Some(bundle.context());
     bundle

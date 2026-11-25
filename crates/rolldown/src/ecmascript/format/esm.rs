@@ -128,6 +128,10 @@ fn render_chunk_content<'code>(
   module_sources: &'code [RenderedModuleSource],
   source_joiner: &mut SourceJoiner<'code>,
 ) {
+  if let Some(layers) = ctx.chunk_graph.async_consumer_layers.get(&ctx.chunk_idx) {
+    render_async_consumers(ctx, layers, module_sources, source_joiner);
+    return;
+  }
   // Dev mode: every chunk carries a graph-rows prelude for the client-side HMR walk.
   // It references `__rolldown_runtime__`, so in the chunk that defines the runtime it
   // must land right after the runtime module; everywhere else it comes first (the
@@ -174,6 +178,54 @@ fn render_chunk_content<'code>(
   // `group_deferred_modules` makes no groups in dev mode, so no prelude is pending here.
   debug_assert!(dev_graph_prelude.is_none());
   render_deferred_groups(ctx, module_sources, source_joiner);
+}
+
+/// ESM resumes the synchronous ancestors of a fulfilled async module in one job, in
+/// evaluation order. A thrown value rejects that consumer's ancestors; its ready siblings
+/// still run. See internal-docs/import-defer/implementation.md.
+fn render_async_consumers<'code>(
+  ctx: &GenerateContext<'_>,
+  widths: &[usize],
+  module_sources: &'code [RenderedModuleSource],
+  out: &mut SourceJoiner<'code>,
+) {
+  let render = |out: &mut SourceJoiner<'code>, module: &'code RenderedModuleSource| {
+    for source in module.all_sources() {
+      out.append_source(source);
+    }
+  };
+  // If the runtime merged into this entry after planning, it is first in execution order.
+  let mut consumers = module_sources;
+  if let Some((first, rest)) = consumers.split_first()
+    && first.module_idx == ctx.link_output.runtime.id()
+  {
+    render(out, first);
+    consumers = rest;
+  }
+  for &width in widths {
+    let (layer, rest) = consumers.split_at(width);
+    consumers = rest;
+    if let [module] = layer {
+      render(out, module);
+      continue;
+    }
+    out.append_source(
+      ";((inits) => {
+	let failure;
+	for (let i = 0; i < inits.length; i++) {
+		try { inits[i](); } catch (error) { if (!failure) failure = [error]; }
+	}
+	if (failure) throw failure[0];
+})([",
+    );
+    for module in layer {
+      out.append_source("() => {");
+      render(out, module);
+      out.append_source("},");
+    }
+    out.append_source("]);");
+  }
+  debug_assert!(consumers.is_empty());
 }
 
 /// Renders a chunk with deferred groups (`group_deferred_modules`):

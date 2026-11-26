@@ -142,6 +142,7 @@ pub struct ScopeHoistingFinalizer<'me, 'ast: 'me> {
   /// Finalized init statements this module donates to another module of its chunk
   /// (`Chunk::remove_map`), as detached fragments. See `transfer_import_stmt`.
   pub transferred_import_record: Vec<(ImportRecordIdx, EcmaAst)>,
+  pub rendered_external_imports: Vec<ModuleIdx>,
   pub json_module_inlined_prop: Option<Box<FxHashMap<SymbolId, ast::Expression<'ast>>>>,
   /// Reference ids of `import.meta.ROLLDOWN_FILE_URL_*` accesses that no emitted file matches.
   ///
@@ -1170,7 +1171,7 @@ impl<'me, 'ast> ScopeHoistingFinalizer<'me, 'ast> {
     ))
   }
 
-  fn generate_declaration_of_module_namespace_object(&self) -> Vec<ast::Statement<'ast>> {
+  fn generate_declaration_of_module_namespace_object(&mut self) -> Vec<ast::Statement<'ast>> {
     if !self.module_namespace_included {
       return vec![];
     }
@@ -1281,6 +1282,7 @@ impl<'me, 'ast> ScopeHoistingFinalizer<'me, 'ast> {
             else {
               return vec![];
             };
+            self.rendered_external_imports.push(module.idx);
             let importee_name = &module.get_import_path(self.ctx.chunk, self.ctx.resolved_paths);
             // construct `__reExport(importer_exports, importee_exports)`
             let call_expr = CallExpression::new_re_export_call(
@@ -1316,7 +1318,9 @@ impl<'me, 'ast> ScopeHoistingFinalizer<'me, 'ast> {
               false,
             );
             let rec = &self.ctx.module.import_records[idx];
-            let importee = rec.resolved_module.map(|module_idx| &self.ctx.modules[module_idx])?;
+            let importee_idx = rec.resolved_module?;
+            self.rendered_external_imports.push(importee_idx);
+            let importee = &self.ctx.modules[importee_idx];
 
             let re_export_call_expr = CallExpression::new_re_export_call(
               // Insert `__reExport(importer_exports, require('ext'))`
@@ -1813,7 +1817,7 @@ impl<'me, 'ast> ScopeHoistingFinalizer<'me, 'ast> {
   }
 
   fn try_rewrite_global_require_call(
-    &self,
+    &mut self,
     call_expr: &mut ast::CallExpression<'ast>,
   ) -> Option<Expression<'ast>> {
     if call_expr.is_global_require_call(self.scope) {
@@ -1947,6 +1951,7 @@ impl<'me, 'ast> ScopeHoistingFinalizer<'me, 'ast> {
             }
           }
           Module::External(importee) => {
+            self.rendered_external_imports.push(importee.idx);
             let request_path =
               call_expr.arguments.get_mut(0).expect("require should have an argument");
             // Rewrite `require('xxx')` to `require('fs')`, if there is an alias that maps 'xxx' to 'fs'
